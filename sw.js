@@ -1,4 +1,4 @@
-const CACHE = 'morning-pt-v4';
+const CACHE = 'morning-pt-v5';
 const SHELL = [
   './',
   './index.html',
