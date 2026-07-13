@@ -70,7 +70,7 @@ video{width:100%;display:block;background:#000;aspect-ratio:16/9}
       <button class="pick" id="pick">Load workout video</button>
       <p>Picked once. Saved on this device. Never uploaded.</p>
     </div>
-    <video id="vid" playsinline hidden></video>
+    <video id="vid" playsinline preload="auto" hidden></video>
     <div class="hud">
       <div class="now" id="now">Ready</div>
       <div class="meta" id="meta">Press start</div>
@@ -108,12 +108,28 @@ var SESS={
 };
 var BYDAY=['mob','upper','lower','core','upper','lower','full'];
 var dow=new Date().getDay();
-var S={sess:BYDAY[dow],light:dow===4,week:1,steps:[],i:0,mode:'idle',t:0,T:0,set:1,tick:null,ready:false,lock:null};
+var S={sess:BYDAY[dow],light:dow===4,week:1,steps:[],i:0,mode:'idle',t:0,T:0,set:1,tick:null,ready:false,lock:null,gen:0};
 function $(i){return document.getElementById(i)}
 var vid=$('vid');
 function mm(s){s=Math.max(0,Math.ceil(s));return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0')}
 try{var r0=JSON.parse(localStorage.getItem('mpt')||'{}');if(r0.week)S.week=r0.week}catch(e){}
 function sv(){try{localStorage.setItem('mpt',JSON.stringify({week:S.week}))}catch(e){}}
+
+/* --- the fix: never act until the seek has actually landed --- */
+function seekTo(t,cb){
+  if(!S.ready){cb();return}
+  if(vid.readyState<1){
+    var h1=function(){vid.removeEventListener('loadedmetadata',h1);seekTo(t,cb)};
+    vid.addEventListener('loadedmetadata',h1);
+    return;
+  }
+  if(Math.abs(vid.currentTime-t)<0.3){cb();return}
+  var done=false;
+  function fin(){if(done)return;done=true;vid.removeEventListener('seeked',fin);cb()}
+  vid.addEventListener('seeked',fin);
+  try{vid.currentTime=t}catch(e){fin();return}
+  setTimeout(fin,1500);
+}
 
 function cell(k){return '<div class="s '+(S.sess===k?'on':'')+'" data-s="'+k+'"><div class="n">'+SESS[k].n+'</div><div class="d">'+SESS[k].d+'</div></div>'}
 function drawPicks(){
@@ -143,6 +159,7 @@ function show(){
 }
 function reset(){
   stop();
+  S.gen++;
   S.steps=SESS[S.sess].b(S.week,S.light);S.i=0;S.mode='idle';
   $('wl').textContent='Week '+S.week;
   $('go').textContent='Start';$('go').disabled=!S.ready&&S.sess!=='mob';
@@ -150,19 +167,27 @@ function reset(){
   drawPicks();drawPlan();show();
   var f=null,i;
   for(i=0;i<S.steps.length;i++)if(S.steps[i].k==='vid'){f=S.steps[i];break}
-  if(f&&S.ready){vid.pause();try{vid.currentTime=B[f.id].a+0.3}catch(e){}}
+  if(f&&S.ready)seekTo(B[f.id].a+0.25,function(){});
 }
 function begin(){
   var s=S.steps[S.i];if(!s)return;
   clearInterval(S.tick);
   if(s.k==='vid'){
-    S.mode='run';vid.currentTime=B[s.id].a;var p=vid.play();if(p&&p.catch)p.catch(function(){});
-    S.tick=setInterval(function(){
-      var e=Math.min(B[s.id].b,vid.duration||9999);
-      $('clock').textContent=mm(e-vid.currentTime);
-      $('fill').style.width=(100*(vid.currentTime-B[s.id].a)/(e-B[s.id].a))+'%';
-      if(vid.currentTime>=e-0.15){vid.pause();next()}
-    },200);
+    S.mode='run';
+    var g=S.gen, a=B[s.id].a;
+    $('clock').textContent='···';
+    seekTo(a,function(){
+      if(g!==S.gen||S.mode!=='run')return;          // user switched session mid-seek
+      var p=vid.play();if(p&&p.catch)p.catch(function(){});
+      S.tick=setInterval(function(){
+        var end=Math.min(B[s.id].b,vid.duration||9999);
+        var ct=vid.currentTime;
+        if(ct<a-1)return;                            // seek still settling — hold
+        $('clock').textContent=mm(end-ct);
+        $('fill').style.width=(100*(ct-a)/(end-a))+'%';
+        if(ct>=end-0.15){vid.pause();next()}
+      },200);
+    });
   } else if(s.k==='sets'){
     S.mode='work';S.set=1;
     $('go').textContent='Set done';$('clock').textContent='GO';
@@ -199,14 +224,20 @@ function tap(){
   if(S.mode==='pause'){S.mode='run';$('go').textContent='Pause';begin();return}
   clearInterval(S.tick);vid.pause();S.mode='pause';$('go').textContent='Resume';
 }
-function stop(){clearInterval(S.tick);vid.pause();S.mode='idle';rel()}
-function wake(){try{navigator.wakeLock.request('screen').then(function(l){S.lock=l})}catch(e){}}
+function stop(){clearInterval(S.tick);try{vid.pause()}catch(e){}S.mode='idle';rel()}
+function wake(){try{navigator.wakeLock.request('screen').then(function(l){S.lock=l},function(){})}catch(e){}}
 function rel(){try{if(S.lock){S.lock.release();S.lock=null}}catch(e){}}
 
 function idb(){return new Promise(function(res,rej){var q=indexedDB.open('mpt',1);q.onupgradeneeded=function(){q.result.createObjectStore('v')};q.onsuccess=function(){res(q.result)};q.onerror=function(){rej()}})}
 function put(f){return idb().then(function(d){return new Promise(function(res){var t=d.transaction('v','readwrite');t.objectStore('v').put(f,'file');t.oncomplete=res;t.onerror=res})})}
 function get(){return idb().then(function(d){return new Promise(function(res){var q=d.transaction('v','readonly').objectStore('v').get('file');q.onsuccess=function(){res(q.result)};q.onerror=function(){res(null)}})}).catch(function(){return null})}
-function mount(f){vid.src=URL.createObjectURL(f);vid.hidden=false;$('drop').style.display='none';S.ready=true;reset()}
+function mount(f){
+  vid.src=URL.createObjectURL(f);
+  vid.hidden=false;$('drop').style.display='none';S.ready=true;
+  vid.addEventListener('loadedmetadata',function(){reset()},{once:true});
+  vid.load();
+  reset();
+}
 
 $('pick').onclick=function(){
   var i=document.createElement('input');i.type='file';i.accept='video/*';
