@@ -1,4 +1,4 @@
-const CACHE = 'morning-pt-v5';
+const CACHE = 'morning-pt-v6';
 const SHELL = [
   './',
   './index.html',
@@ -22,8 +22,6 @@ self.addEventListener('activate', e => {
   );
 });
 
-// Network-first for the app shell, so a new build always wins.
-// Cache-first for fonts and icons, which never change.
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
   const isShell = e.request.mode === 'navigate' || e.request.url.endsWith('index.html');
